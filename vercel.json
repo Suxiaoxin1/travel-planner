@@ -1,0 +1,11 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vue",
+  "rewrites": [
+    { "source": "/api/ollama/status", "destination": "/api/status" },
+    { "source": "/api/chat/non-stream", "destination": "/api/chat-non-stream" },
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
