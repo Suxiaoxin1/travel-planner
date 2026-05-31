@@ -20,6 +20,11 @@ import re
 import sys
 import io
 import os
+import time
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timezone
 from typing import Dict, Optional, List
 
 from flask import Flask, request, Response, jsonify, stream_with_context
@@ -555,8 +560,176 @@ def delete_user_data(user_id):
 
 def new_date_iso():
     """返回当前时间的 ISO 格式字符串"""
-    from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+# ============================================================
+# 用户反馈接口
+# ============================================================
+
+# 目标反馈邮箱
+FEEDBACK_EMAIL = os.environ.get("FEEDBACK_EMAIL", "748987578@qq.com")
+
+# SMTP配置（可通过环境变量配置）
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASS = os.environ.get("SMTP_PASS", "")
+
+# 反馈类型标签映射
+FEEDBACK_TYPE_LABELS = {
+    "bug": "🐛 问题反馈",
+    "suggestion": "💡 功能建议",
+    "question": "❓ 使用咨询",
+    "other": "📝 其他",
+}
+
+
+def send_feedback_email(feedback_data):
+    """通过SMTP发送反馈邮件到指定邮箱"""
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        print("[Feedback] SMTP未配置，跳过邮件发送")
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"[用户反馈] {FEEDBACK_TYPE_LABELS.get(feedback_data.get('type', 'other'), '反馈')} - {datetime.now().strftime('%Y-%m-%d')}"
+        msg["From"] = SMTP_USER
+        msg["To"] = FEEDBACK_EMAIL
+
+        feedback_type = FEEDBACK_TYPE_LABELS.get(feedback_data.get("type", "other"), feedback_data.get("type", ""))
+        description = feedback_data.get("description", "")
+        contact = feedback_data.get("contact", "")
+        submit_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8">
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }}
+  .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+  .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }}
+  .body {{ background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }}
+  .field {{ margin-bottom: 15px; }}
+  .label {{ font-weight: bold; color: #555; }}
+  .value {{ background: white; padding: 12px; border-radius: 6px; margin-top: 5px; }}
+  pre {{ white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit; }}
+  .footer {{ text-align: center; margin-top: 20px; color: #999; font-size: 14px; }}
+</style></head>
+<body>
+  <div class="container">
+    <div class="header"><h2 style="margin:0;">📬 新的用户反馈</h2></div>
+    <div class="body">
+      <div class="field"><div class="label">反馈类型：</div><div class="value">{feedback_type}</div></div>
+      {f'<div class="field"><div class="label">联系方式：</div><div class="value">{contact}</div></div>' if contact else ''}
+      <div class="field"><div class="label">问题描述：</div><div class="value"><pre>{description}</pre></div></div>
+      <div class="field"><div class="label">提交时间：</div><div class="value">{submit_time}</div></div>
+      <div class="field"><div class="label">客户端IP：</div><div class="value">{request.remote_addr if request else '未知'}</div></div>
+    </div>
+    <div class="footer"><p>此邮件由旅行规划应用自动发送，请勿直接回复。</p></div>
+  </div>
+</body>
+</html>"""
+
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+
+        print(f"[Feedback] 邮件发送成功 -> {FEEDBACK_EMAIL}")
+        return True
+
+    except Exception as e:
+        print(f"[Feedback] 邮件发送失败: {e}")
+        return False
+
+
+@app.route("/api/feedback/submit", methods=["POST"])
+def feedback_submit():
+    """
+    用户反馈提交接口
+
+    请求体:
+    {
+        "type": "bug|suggestion|question|other",
+        "description": "问题描述（至少10个字符）",
+        "contact": "联系方式（可选）"
+    }
+
+    返回:
+    {
+        "success": true,
+        "message": "感谢您的反馈！我们会尽快处理。",
+        "data": { "id": "FB_xxx", "emailSent": true }
+    }
+    """
+    data = request.get_json(silent=True) or {}
+
+    feedback_type = data.get("type", "").strip()
+    description = data.get("description", "").strip()
+    contact = data.get("contact", "").strip()
+
+    # 验证必填字段
+    if not feedback_type or not description:
+        return jsonify({
+            "success": False,
+            "error": "请填写完整的反馈信息",
+            "code": "MISSING_FIELDS"
+        }), 400
+
+    if len(description) < 10:
+        return jsonify({
+            "success": False,
+            "error": "问题描述至少需要10个字符",
+            "code": "DESCRIPTION_TOO_SHORT"
+        }), 400
+
+    # 记录反馈到控制台
+    print(f"\n[Feedback] 收到新反馈:")
+    print(f"  类型: {FEEDBACK_TYPE_LABELS.get(feedback_type, feedback_type)}")
+    if contact:
+        print(f"  联系方式: {contact}")
+    print(f"  描述: {description[:200]}{'...' if len(description) > 200 else ''}")
+    print()
+
+    # 尝试发送邮件
+    email_sent = send_feedback_email({
+        "type": feedback_type,
+        "description": description,
+        "contact": contact,
+    })
+
+    # 同时保存反馈到文件（作为备份）
+    try:
+        feedback_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feedbacks")
+        os.makedirs(feedback_dir, exist_ok=True)
+
+        feedback_file = os.path.join(feedback_dir, f"FB_{int(time.time() * 1000)}.json")
+        feedback_record = {
+            "id": f"FB_{int(time.time() * 1000)}",
+            "type": feedback_type,
+            "description": description,
+            "contact": contact,
+            "timestamp": datetime.now().isoformat(),
+            "emailSent": email_sent,
+        }
+        with open(feedback_file, "w", encoding="utf-8") as f:
+            json.dump(feedback_record, f, ensure_ascii=False, indent=2)
+        print(f"[Feedback] 已保存到文件: {feedback_file}")
+    except Exception as e:
+        print(f"[Feedback] 文件保存失败: {e}")
+
+    return jsonify({
+        "success": True,
+        "message": "感谢您的反馈！我们会尽快处理。",
+        "data": {
+            "id": f"FB_{int(time.time() * 1000)}",
+            "emailSent": email_sent,
+            "submittedAt": datetime.now().isoformat(),
+        }
+    })
 
 
 # ============================================================

@@ -43,7 +43,7 @@
             class="w-full bg-white/20 backdrop-blur-sm text-white text-xl font-bold px-3 py-2 rounded-lg border border-white/30 placeholder-white/60"
             placeholder="行程名称"
           />
-          <h2 v-else class="text-xl font-bold text-white drop-shadow">{{ trip.name }}</h2>
+          <h2 v-else class="text-xl font-bold text-white drop-shadow">{{ cleanTripName || trip.name }}</h2>
         </div>
       </div>
 
@@ -56,7 +56,7 @@
             <div class="flex-1">
               <label class="text-xs text-gray-400">目的地</label>
               <input v-if="isEditing" v-model="editData.destination" class="w-full text-sm text-gray-900 border-b border-gray-200 focus:border-blue-400 focus:outline-none py-1" />
-              <p v-else class="text-sm text-gray-900">{{ trip.destination || '未设置' }}</p>
+              <p v-else class="text-sm text-gray-900">{{ extractCleanTitle(trip.destination) || trip.destination || '未设置' }}</p>
             </div>
           </div>
           <div class="flex items-center gap-3">
@@ -189,7 +189,7 @@
             {{ showAiPlan ? '收起' : '展开' }}
           </button>
         </div>
-        <div v-if="showAiPlan" class="prose prose-sm max-w-none text-gray-700 bg-gray-50 rounded-lg p-4 whitespace-pre-wrap text-[13px] leading-relaxed">{{ trip.aiPlanContent }}</div>
+        <div v-if="showAiPlan" class="ai-content text-gray-700 bg-gray-50 rounded-lg p-4 text-[13px] leading-relaxed">{{ cleanedAiContent }}</div>
       </section>
 
       <!-- 备注 -->
@@ -212,11 +212,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getTripById, updateTrip, deleteTrip } from '../stores/trip.js'
 import { ArrowLeft, MapPin, Calendar, Tag, Wallet, Plus, Trash2, X, Sparkles } from 'lucide-vue-next'
 import { getLandmarkImageUrl, handleImageError } from '../utils/landmarkImages.js'
+import { cleanAiContent, extractCleanTitle } from '../services/ai.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -224,6 +225,24 @@ const route = useRoute()
 const trip = ref(null)
 const isEditing = ref(false)
 const showAiPlan = ref(true)
+
+// 清理后的 AI 内容（自动去除多余符号）
+const cleanedAiContent = computed(() => {
+  if (!trip.value?.aiPlanContent) return ''
+  // 如果内容已经是清理过的（没有多余符号），直接返回；否则清理
+  const content = trip.value.aiPlanContent
+  // 检测是否有需要清理的符号
+  if (/【\*】|^\s*[-*_]{3,}|\|\|.*\|\|/m.test(content)) {
+    return cleanAiContent(content)
+  }
+  return content
+})
+
+// 清理后的行程名称
+const cleanTripName = computed(() => {
+  if (!trip.value?.name) return ''
+  return extractCleanTitle(trip.value.name)
+})
 
 const editData = reactive({
   name: '',
@@ -380,3 +399,23 @@ const goBack = () => {
   }
 }
 </script>
+
+<style scoped>
+/* AI 生成内容渲染样式 */
+.ai-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.8;
+}
+
+/* 标题层级 */
+.ai-content :deep(strong) {
+  color: #1f2937;
+  font-weight: 600;
+}
+
+/* 列表项美化 */
+.ai-content::v-deep(*) {
+  margin: 0.25em 0;
+}
+</style>

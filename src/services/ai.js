@@ -209,7 +209,7 @@ function extractDestination(planContent) {
   }
 
   // 2. 明确的"目的地"标注
-  const explicitMatch = planContent.match(/目的地[：:\s]*([^\n\r，,。]+)/i)
+  const explicitMatch = planContent.match(/目的地[：:]*\s*([^\n\r，,。]+)/i)
   if (explicitMatch) {
     const d = explicitMatch[1].trim().replace(/[（(][^）)]*[）)]$/, '')
     if (!SKIP_WORDS.has(d)) return d
@@ -351,8 +351,8 @@ function parseTripPlanClient(planContent, title) {
       const timeMatch = line.match(/(\d{1,2}:\d{2})\s*[-~]\s*(\d{1,2}:\d{2})?\s*(.+)/)
       if (timeMatch) {
         activities.push({ time: timeMatch[1], name: timeMatch[3].trim(), type: 'sightseeing', note: '' })
-      } else if (/^[-*•]/.test(line)) {
-        const activityName = line.replace(/^[-*•\s]+/, '').trim()
+      } else if (/^[*-•]/.test(line)) {
+        const activityName = line.replace(/^[*-•\s]+/, '').trim()
         if (activityName) {
           activities.push({ time: '', name: activityName, type: 'sightseeing', note: '' })
         }
@@ -455,4 +455,68 @@ export async function importTripPlan({ conversationId, messageId, planContent, t
     message: '行程导入成功！',
     data: tripData
   }
+}
+
+/**
+ * 清理 AI 生成内容中的多余符号和格式
+ * @param {string} content - AI 生成的原始内容
+ * @returns {string} 清理后的内容
+ */
+export function cleanAiContent(content) {
+  if (!content || typeof content !== 'string') return ''
+
+  let cleaned = content
+
+  // 1. 移除多余的星号、破折号、圆点等列表符号（保留换行）
+  cleaned = cleaned.replace(/^[*\-•]\s+/gm, '')
+
+  // 2. 移除多余的表格分隔符（如 |---|---|）
+  cleaned = cleaned.replace(/^[\|\s:-]+$/gm, '')
+
+  // 3. 移除 HTML 注释
+  cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '')
+
+  // 4. 清理多余的空行（最多保留一个空行）
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n')
+
+  // 5. 移除行首行尾的空格
+  cleaned = cleaned.split('\n').map(line => line.trim()).join('\n')
+
+  // 6. 移除结尾多余空行
+  cleaned = cleaned.trim()
+
+  return cleaned
+}
+
+/**
+ * 从 AI 生成内容中提取干净的标题
+ * @param {string} content - AI 生成的原始内容或标题
+ * @returns {string} 清理后的标题
+ */
+export function extractCleanTitle(content) {
+  if (!content || typeof content !== 'string') return 'AI生成行程'
+
+  let title = content.trim()
+
+  // 1. 如果是完整内容，取第一行作为标题
+  if (title.includes('\n')) {
+    title = title.split('\n')[0].trim()
+  }
+
+  // 2. 移除 Markdown 标题符号（# ## ###）
+  title = title.replace(/^#+\s*/, '')
+
+  // 3. 移除多余的标点符号和格式符号
+  title = title.replace(/^[*\-•\s]+/, '')
+  title = title.replace(/[*\-•\s]+$/, '')
+
+  // 4. 移除【】等括号（保留括号内的内容）
+  title = title.replace(/【([^】]+)】/g, '$1')
+
+  // 5. 如果标题太长，截断
+  if (title.length > 50) {
+    title = title.slice(0, 47) + '...'
+  }
+
+  return title || 'AI生成行程'
 }
