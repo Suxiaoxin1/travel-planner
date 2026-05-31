@@ -281,6 +281,78 @@
       </div>
     </div>
 
+    <!-- 导入行程日期确认弹窗 -->
+    <div
+      v-if="dateDialog.show"
+      class="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm"
+      @click.self="dateDialog.show = false"
+    >
+      <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md mx-4 shadow-2xl animate-slide-up">
+        <!-- 弹窗头部 -->
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3 class="text-base font-semibold text-gray-900">确认出行信息</h3>
+          <button @click="dateDialog.show = false" class="p-1 text-gray-400 hover:text-gray-600 transition-colors">
+            <X :size="18" />
+          </button>
+        </div>
+
+        <!-- 预览信息 -->
+        <div class="px-5 pt-4 space-y-4">
+          <!-- 目的地预览 -->
+          <div class="flex items-center gap-2 text-sm">
+            <MapPin :size="15" class="text-blue-500" />
+            <span class="text-gray-500">目的地：</span>
+            <span class="font-medium text-gray-900">{{ dateDialog.destination || '识别中...' }}</span>
+          </div>
+
+          <!-- 日期选择 -->
+          <div class="space-y-3">
+            <label class="block">
+              <span class="text-xs text-gray-500 font-medium">出发日期</span>
+              <input
+                v-model="dateDialog.startDate"
+                type="date"
+                :min="todayStr"
+                class="mt-1 w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 focus:border-blue-400 focus:ring-1 focus:ring-blue-100 outline-none transition-colors bg-gray-50/50"
+              />
+            </label>
+            <label class="block">
+              <span class="text-xs text-gray-500 font-medium">返程日期</span>
+              <input
+                v-model="dateDialog.endDate"
+                type="date"
+                :min="dateDialog.startDate || todayStr"
+                class="mt-1 w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 focus:border-blue-400 focus:ring-1 focus:ring-blue-100 outline-none transition-colors bg-gray-50/50"
+              />
+            </label>
+          </div>
+
+          <!-- 提示文字 -->
+          <p class="text-[12px] text-amber-600 bg-amber-50 px-3 py-2 rounded-lg flex gap-1.5">
+            <AlertCircle :size="14" class="shrink-0 mt-0.5" />
+            请确认您的实际出行日期，行程安排将按此时间展开。
+          </p>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="flex gap-3 px-5 py-4 border-t border-gray-100 mt-4">
+          <button
+            @click="dateDialog.show = false"
+            class="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="confirmDateAndImport"
+            :disabled="!dateDialog.startDate || !dateDialog.endDate || dateDialog.startDate > dateDialog.endDate"
+            class="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-sm font-medium text-white hover:opacity-90 active:opacity-80 disabled:opacity-40 transition-opacity shadow-sm"
+          >
+            确认导入
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- 导入行程结果提示 -->
     <div
       v-if="importToast.show"
@@ -299,7 +371,7 @@ import { ref, computed, nextTick, onMounted } from 'vue'
 import {
   Plus, MessageSquare, Trash2, PanelLeft, Sparkles,
   SendHorizontal, MapPin, CalendarDays, Users, Wallet,
-  Download, UserCircle, CheckCircle, AlertCircle
+  Download, UserCircle, CheckCircle, AlertCircle, X
 } from 'lucide-vue-next'
 import {
   getAllConversations, getActiveConversation, setActiveConversation,
@@ -327,6 +399,18 @@ const currentController = ref(null)
 const showProfileDialog = ref(false)
 const pendingMessage = ref('')
 const importToast = ref({ show: false, success: false, message: '' })
+
+// 日期确认弹窗状态
+const dateDialog = ref({
+  show: false,
+  msg: null,
+  destination: '',
+  startDate: '',
+  endDate: '',
+})
+
+// 今天日期字符串（用于日期选择器 min 属性）
+const todayStr = new Date().toISOString().slice(0, 10)
 
 const quickPrompts = [
   { text: '帮我规划云南5日游', icon: MapPin },
@@ -480,6 +564,40 @@ function buildProfileData() {
 }
 
 async function handleImportTrip(msg) {
+  // 1. 预提取目的地信息用于弹窗展示
+  let previewDest = ''
+  const destPatterns = [
+    /【([^】]+)】/,
+    /(格聂神山|稻城亚丁|四姑娘山|贡嘎雪山|峨眉山|泰山|华山|张家界|九寨沟|黄山|桂林|西湖|大理|丽江|三亚|成都|北京|上海|广州|深圳|杭州|西安|重庆|武汉|厦门|昆明|拉萨|东京|巴黎|伦敦|纽约|曼谷|首尔)/,
+    /前往\s*([^\n]{2,8}?)(?:旅行|旅游|出行|探秘|考察)/,
+  ]
+  for (const p of destPatterns) {
+    const m = msg.content.match(p)
+    if (m) { previewDest = m[1] || m[0]; break }
+  }
+
+  // 2. 计算默认日期（从今天开始，根据内容推断天数）
+  const dayMatch = msg.content.match(/(?:Day|天|第)\s*(\d+)/gi)
+  const dayCount = dayMatch ? Math.max(...dayMatch.map(d => parseInt(/\d+/.exec(d)[0]))) : 3
+  const today = new Date()
+  const defaultStart = today.toISOString().slice(0, 10)
+  const defaultEnd = new Date(today.getTime() + (dayCount - 1) * 86400000).toISOString().slice(0, 10)
+
+  // 3. 弹出日期确认对话框
+  dateDialog.value = {
+    show: true,
+    msg,
+    destination: previewDest || '未识别',
+    startDate: defaultStart,
+    endDate: defaultEnd,
+  }
+}
+
+/** 用户确认日期后执行导入 */
+async function confirmDateAndImport() {
+  const { msg, startDate, endDate } = dateDialog.value
+  dateDialog.value.show = false
+
   const convId = chatState.activeConversationId
   if (!convId) return
 
@@ -495,10 +613,12 @@ async function handleImportTrip(msg) {
       planContent: msg.content,
       title: title + (title.length >= 20 ? '...' : ''),
       userId: userId || '',
+      startDate,
+      endDate,
     })
 
     if (result.success) {
-      showToast(true, '行程导入成功！')
+      showToast(true, '行程导入成功！已按您选择的日期生成行程。')
     } else {
       showToast(false, result.message || '行程导入功能暂未开放，敬请期待')
     }
@@ -630,5 +750,15 @@ onMounted(() => {
 
 .animate-dialog-in {
   animation: dialog-in 0.2s ease-out;
+}
+
+/* 底部弹窗滑入动画 */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out;
 }
 </style>
